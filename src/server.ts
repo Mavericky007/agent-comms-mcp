@@ -1,6 +1,9 @@
 import express from "express";
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { v4 as uuidv4 } from "uuid";
 import { Store } from "./store.js";
 import { registerTools, setConnectionId } from "./tools.js";
@@ -13,36 +16,100 @@ const store = new Store();
 const app = express();
 app.use(express.json());
 
-// --- Track SSE sessions ---
-const sessions: Record<string, SSEServerTransport> = {};
+// --- Track sessions for both transports ---
+const sseSessions: Record<string, SSEServerTransport> = {};
+const httpSessions: Record<string, StreamableHTTPServerTransport> = {};
 
-// --- MCP SSE Endpoint ---
-// Claude Code connects here with type: "sse"
-app.get("/sse", async (req, res) => {
-  const transport = new SSEServerTransport("/messages", res);
-  const connectionId = transport.sessionId;
-  sessions[connectionId] = transport;
-
+// Helper: create a new McpServer wired to the store
+function createMcpServer(connectionId: string): McpServer {
   const server = new McpServer({
     name: "agent-comms",
     version: "1.0.0",
   });
-
   setConnectionId(server, connectionId);
   registerTools(server, store);
+  return server;
+}
+
+// --- Streamable HTTP Transport (modern, /mcp endpoint) ---
+app.post("/mcp", async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+  // Existing session
+  if (sessionId && httpSessions[sessionId]) {
+    await httpSessions[sessionId].handleRequest(req, res, req.body);
+    return;
+  }
+
+  // New initialization
+  if (!sessionId && isInitializeRequest(req.body)) {
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (sid) => {
+        httpSessions[sid] = transport;
+      },
+    });
+
+    transport.onclose = () => {
+      const sid = transport.sessionId;
+      if (sid) {
+        store.setAgentOffline(sid);
+        delete httpSessions[sid];
+      }
+    };
+
+    const connectionId = randomUUID();
+    const server = createMcpServer(connectionId);
+
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    return;
+  }
+
+  res.status(400).json({
+    jsonrpc: "2.0",
+    error: { code: -32000, message: "Bad Request: No valid session" },
+    id: null,
+  });
+});
+
+app.get("/mcp", async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  if (sessionId && httpSessions[sessionId]) {
+    await httpSessions[sessionId].handleRequest(req, res);
+    return;
+  }
+  res.status(400).send("Invalid or missing session ID");
+});
+
+app.delete("/mcp", async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  if (sessionId && httpSessions[sessionId]) {
+    await httpSessions[sessionId].handleRequest(req, res);
+    return;
+  }
+  res.status(400).send("Invalid or missing session ID");
+});
+
+// --- Legacy SSE Transport (/sse endpoint) ---
+app.get("/sse", async (req, res) => {
+  const transport = new SSEServerTransport("/messages", res);
+  const connectionId = transport.sessionId;
+  sseSessions[connectionId] = transport;
+
+  const server = createMcpServer(connectionId);
 
   res.on("close", () => {
     store.setAgentOffline(connectionId);
-    delete sessions[connectionId];
+    delete sseSessions[connectionId];
   });
 
   await server.connect(transport);
 });
 
-// MCP message endpoint (tool calls from Claude Code)
 app.post("/messages", async (req, res) => {
   const sessionId = req.query.sessionId as string;
-  const transport = sessions[sessionId];
+  const transport = sseSessions[sessionId];
   if (!transport) {
     res.status(404).json({ error: "Session not found" });
     return;
