@@ -291,6 +291,11 @@ export function getDashboardHTML(): string {
     return div.innerHTML;
   }
 
+  // Escape a string for safe use inside an HTML attribute value (double-quoted)
+  function escapeAttr(text) {
+    return escapeHtml(text).replace(/'/g, '&#39;');
+  }
+
   // --- SSE Connection ---
   function connectSSE() {
     const es = new EventSource('/api/events');
@@ -391,7 +396,7 @@ export function getDashboardHTML(): string {
     }
     el.innerHTML = agents.map(a => {
       const isActive = selected && selected.type === 'agent' && selected.name === a.name;
-      return '<div class="sidebar-item' + (isActive ? ' active' : '') + '" onclick="window.__selectConvo(\\'agent\\',\\'' + escapeHtml(a.name) + '\\')">'
+      return '<div class="sidebar-item' + (isActive ? ' active' : '') + '" data-convo-type="agent" data-convo-name="' + escapeAttr(a.name) + '">'
         + '<div class="status-dot ' + a.status + '"></div>'
         + '<span>' + escapeHtml(a.name) + '</span>'
         + '</div>';
@@ -406,7 +411,7 @@ export function getDashboardHTML(): string {
     }
     el.innerHTML = state.channels.map(c => {
       const isActive = selected && selected.type === 'channel' && selected.name === c.name;
-      return '<div class="sidebar-item' + (isActive ? ' active' : '') + '" onclick="window.__selectConvo(\\'channel\\',\\'' + escapeHtml(c.name) + '\\')">'
+      return '<div class="sidebar-item' + (isActive ? ' active' : '') + '" data-convo-type="channel" data-convo-name="' + escapeAttr(c.name) + '">'
         + '<span class="channel-prefix">#</span>'
         + '<span>' + escapeHtml(c.name) + '</span>'
         + '</div>';
@@ -537,9 +542,16 @@ export function getDashboardHTML(): string {
   }
 
   // Expose to inline handlers
-  window.__selectConvo = selectConvo;
   window.sendMsg = sendMsg;
   window.createChannel = createChannel;
+
+  // Event delegation for sidebar clicks
+  document.querySelector('.sidebar').addEventListener('click', function(e) {
+    const item = e.target.closest('[data-convo-type]');
+    if (item) {
+      selectConvo(item.dataset.convoType, item.dataset.convoName);
+    }
+  });
 
   // --- Init ---
   fetchState().then(() => {
