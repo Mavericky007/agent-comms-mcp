@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Agent, Message, Channel, StoreData, DashboardSSEClient } from "./types.js";
+import { getVersionString } from "./version.js";
 
 const DEFAULT_TTL_MS = Number(process.env.MESSAGE_TTL_MS) || 86400000; // 24h
 const STORE_PATH = process.env.STORE_PATH || new URL("../store.json", import.meta.url).pathname;
@@ -106,19 +107,23 @@ export class Store {
 
   // --- Agent Operations ---
 
-  registerAgent(name: string, connectionId: string): Agent {
+  registerAgent(name: string, connectionId: string): { agent: Agent; versionChanged: boolean } {
     const existing = this.agents.get(name);
     const now = new Date().toISOString();
+    const currentVersion = getVersionString();
 
     // Allow re-registration: update connection ID and mark online
     if (existing) {
+      const previousVersion = existing.serverVersion;
+      const versionChanged = !!previousVersion && previousVersion !== currentVersion;
       existing.id = connectionId;
       existing.status = "online";
       existing.connectedAt = now;
       existing.lastSeen = now;
+      existing.serverVersion = currentVersion;
       this.persist();
       this.notifyDashboard("agent:online", existing);
-      return existing;
+      return { agent: existing, versionChanged };
     }
 
     const agent: Agent = {
@@ -128,11 +133,12 @@ export class Store {
       channels: [],
       connectedAt: now,
       lastSeen: now,
+      serverVersion: currentVersion,
     };
     this.agents.set(name, agent);
     this.persist();
     this.notifyDashboard("agent:online", agent);
-    return agent;
+    return { agent, versionChanged: false };
   }
 
   setAgentOffline(connectionId: string): void {

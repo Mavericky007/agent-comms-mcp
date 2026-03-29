@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import { Store } from "./store.js";
 import { registerTools, setConnectionId } from "./tools.js";
 import { getDashboardHTML } from "./dashboard.js";
+import { getVersionInfo, getVersionString } from "./version.js";
 import type { DashboardSSEClient } from "./types.js";
 
 const PORT = Number(process.env.PORT) || 4200;
@@ -24,7 +25,7 @@ const httpSessions: Record<string, StreamableHTTPServerTransport> = {};
 function createMcpServer(connectionId: string): McpServer {
   const server = new McpServer({
     name: "agent-comms",
-    version: "1.0.0",
+    version: getVersionString(),
   });
   setConnectionId(server, connectionId);
   registerTools(server, store);
@@ -128,7 +129,7 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/api/state", (_req, res) => {
-  res.json(store.getFullState());
+  res.json({ ...store.getFullState(), server: getVersionInfo() });
 });
 
 app.post("/api/send", (req, res) => {
@@ -172,7 +173,8 @@ app.get("/api/events", (req, res) => {
 
 // --- Start ---
 app.listen(PORT, () => {
-  console.log(`Agent Comms MCP server running on http://localhost:${PORT}`);
+  const vi = getVersionInfo();
+  console.log(`Agent Comms MCP server v${vi.version} (${vi.gitHash}) running on http://localhost:${PORT}`);
   console.log(`Dashboard: http://localhost:${PORT}`);
   console.log(`MCP SSE endpoint: http://localhost:${PORT}/sse`);
 });

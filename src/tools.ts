@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Store } from "./store.js";
+import { getVersionInfo } from "./version.js";
 
 // Each MCP client (Claude Code instance) gets its own McpServer.
 // The connectionId links it to an agent in the shared store.
@@ -25,10 +26,14 @@ export function registerTools(server: McpServer, store: Store): void {
     async ({ name }) => {
       try {
         const connectionId = getConnectionId(server);
-        const agent = store.registerAgent(name, connectionId);
+        const { agent, versionChanged } = store.registerAgent(name, connectionId);
         store.setAgentServer(name, server);
+        const response: Record<string, unknown> = { ...agent, server: getVersionInfo() };
+        if (versionChanged) {
+          response.notice = "Server has been updated since your last session. You may want to reload plugins to pick up changes.";
+        }
         return {
-          content: [{ type: "text" as const, text: JSON.stringify(agent, null, 2) }],
+          content: [{ type: "text" as const, text: JSON.stringify(response, null, 2) }],
         };
       } catch (err: any) {
         return {

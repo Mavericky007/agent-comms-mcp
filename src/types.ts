@@ -5,6 +5,7 @@ export interface Agent {
   channels: string[];
   connectedAt: string;
   lastSeen: string;
+  serverVersion?: string;
 }
 
 export interface Message {
