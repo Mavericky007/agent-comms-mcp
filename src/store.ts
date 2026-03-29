@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { v4 as uuidv4 } from "uuid";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Agent, Message, Channel, StoreData, DashboardSSEClient } from "./types.js";
 
 const DEFAULT_TTL_MS = Number(process.env.MESSAGE_TTL_MS) || 86400000; // 24h
@@ -11,6 +12,7 @@ export class Store {
   private channels: Map<string, Channel> = new Map();
   private messages: Message[] = [];
   private dashboardClients: DashboardSSEClient[] = [];
+  private agentServers: Map<string, McpServer> = new Map();
 
   constructor() {
     this.load();
@@ -80,19 +82,50 @@ export class Store {
     }
   }
 
+  // --- Agent MCP Server Registry ---
+
+  setAgentServer(agentName: string, server: McpServer): void {
+    this.agentServers.set(agentName, server);
+  }
+
+  removeAgentServer(agentName: string): void {
+    this.agentServers.delete(agentName);
+  }
+
+  private notifyAgent(agentName: string, message: Message): void {
+    const server = this.agentServers.get(agentName);
+    if (!server) return;
+    const mentioned = message.mentions.includes(agentName);
+    const prefix = mentioned ? `[MENTION]` : `[INFO]`;
+    const source = message.type === "channel" ? `#${message.to}` : "DM";
+    server.sendLoggingMessage({
+      level: mentioned ? "warning" : "info",
+      data: `${prefix} New message from ${message.from} in ${source}: ${message.body}`,
+    }).catch(() => {});
+  }
+
   // --- Agent Operations ---
 
   registerAgent(name: string, connectionId: string): Agent {
     const existing = this.agents.get(name);
-    if (existing && existing.status === "online") {
-      throw new Error(`Agent '${name}' is already online`);
-    }
     const now = new Date().toISOString();
+
+    // Allow re-registration: update connection ID and mark online
+    if (existing) {
+      existing.id = connectionId;
+      existing.status = "online";
+      existing.connectedAt = now;
+      existing.lastSeen = now;
+      this.persist();
+      this.notifyDashboard("agent:online", existing);
+      return existing;
+    }
+
     const agent: Agent = {
       id: connectionId,
       name,
       status: "online",
-      channels: existing?.channels ?? [],
+      channels: [],
       connectedAt: now,
       lastSeen: now,
     };
@@ -143,6 +176,7 @@ export class Store {
       to,
       type: "direct",
       body,
+      mentions: [to],
       createdAt: now,
       expiresAt: new Date(Date.now() + DEFAULT_TTL_MS).toISOString(),
       readBy: [],
@@ -150,10 +184,11 @@ export class Store {
     this.messages.push(message);
     this.persist();
     this.notifyDashboard("message:new", message);
+    this.notifyAgent(to, message);
     return message;
   }
 
-  broadcastMessage(from: string, channelName: string, body: string): Message {
+  broadcastMessage(from: string, channelName: string, body: string, mentions: string[] = []): Message {
     const channel = this.channels.get(channelName);
     if (!channel) {
       throw new Error(`Channel '${channelName}' not found`);
@@ -168,6 +203,7 @@ export class Store {
       to: channelName,
       type: "channel",
       body,
+      mentions,
       createdAt: now,
       expiresAt: new Date(Date.now() + DEFAULT_TTL_MS).toISOString(),
       readBy: [],
@@ -175,6 +211,14 @@ export class Store {
     this.messages.push(message);
     this.persist();
     this.notifyDashboard("message:new", message);
+
+    // Notify all online channel members except the sender
+    for (const member of channel.members) {
+      if (member !== from) {
+        this.notifyAgent(member, message);
+      }
+    }
+
     return message;
   }
 

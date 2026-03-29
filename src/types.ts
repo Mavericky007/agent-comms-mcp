@@ -13,6 +13,7 @@ export interface Message {
   to: string;
   type: "direct" | "channel";
   body: string;
+  mentions: string[];
   createdAt: string;
   expiresAt: string;
   readBy: string[];

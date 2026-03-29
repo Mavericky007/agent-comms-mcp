@@ -53,7 +53,9 @@ app.post("/mcp", async (req, res) => {
     transport.onclose = () => {
       const sid = transport.sessionId;
       if (sid) {
-        store.setAgentOffline(sid);
+        const agent = store.getAgentByConnectionId(connectionId);
+        if (agent) store.removeAgentServer(agent.name);
+        store.setAgentOffline(connectionId);
         delete httpSessions[sid];
       }
     };
@@ -100,6 +102,8 @@ app.get("/sse", async (req, res) => {
   const server = createMcpServer(connectionId);
 
   res.on("close", () => {
+    const agent = store.getAgentByConnectionId(connectionId);
+    if (agent) store.removeAgentServer(agent.name);
     store.setAgentOffline(connectionId);
     delete sseSessions[connectionId];
   });

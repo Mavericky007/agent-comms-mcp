@@ -26,6 +26,7 @@ export function registerTools(server: McpServer, store: Store): void {
       try {
         const connectionId = getConnectionId(server);
         const agent = store.registerAgent(name, connectionId);
+        store.setAgentServer(name, server);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(agent, null, 2) }],
         };
@@ -65,17 +66,18 @@ export function registerTools(server: McpServer, store: Store): void {
 
   server.tool(
     "broadcast",
-    "Post a message to a channel. You must be a member of the channel.",
+    "Post a message to a channel. All members receive the message. Use mentions to flag specific agents who should pay attention.",
     {
       channel: z.string().describe("Channel name"),
       body: z.string().describe("Message content (text or markdown)"),
+      mentions: z.array(z.string()).optional().describe("Agent names to mention — mentioned agents get a priority notification. All channel members still receive the message."),
     },
-    async ({ channel, body }) => {
+    async ({ channel, body, mentions }) => {
       try {
         const connectionId = getConnectionId(server);
         const agent = store.getAgentByConnectionId(connectionId);
         if (!agent) return { content: [{ type: "text" as const, text: "Error: Must register first" }], isError: true };
-        const message = store.broadcastMessage(agent.name, channel, body);
+        const message = store.broadcastMessage(agent.name, channel, body, mentions ?? []);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(message, null, 2) }],
         };
@@ -90,7 +92,7 @@ export function registerTools(server: McpServer, store: Store): void {
 
   server.tool(
     "check_messages",
-    "Get all unread messages (direct and from subscribed channels). Marks them as read.",
+    "Get all unread messages (direct and from subscribed channels). Marks them as read. Messages with your name in the 'mentions' array require your attention; other channel messages are informational.",
     {},
     async () => {
       try {
